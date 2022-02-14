@@ -1,0 +1,295 @@
+---
+title: "Test"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(zoo)
+library(usmap)
+recessions.df = read.table(textConnection(
+"Peak, Trough
+2001-03-01, 2001-11-01
+2007-12-01, 2009-06-01
+2020-03-01, 2020-05-01
+"), sep=',',
+colClasses=c('Date', 'Date'), header=TRUE)
+```
+
+## R Markdown
+
+
+```{r}
+
+food_data <- 'https://download.bls.gov/pub/time.series/ap/ap.data.3.Food' %>% read_tsv()
+food_series_lookup <- 'https://download.bls.gov/pub/time.series/ap/ap.series'%>% read_tsv()
+food_item <- 'https://download.bls.gov/pub/time.series/ap/ap.item' %>% read_tsv()
+food_area <- 'https://download.bls.gov/pub/time.series/ap/ap.area' %>% read_tsv()
+
+p1 <- 
+food_data %>% 
+  inner_join(food_series_lookup) %>% 
+  inner_join(food_item) %>% 
+  filter(item_code == '711211') %>% 
+  filter(period != 'M13') %>% 
+  mutate(date = paste0(year, stringr::str_replace_all( period, 'M', '-'))) %>% 
+  select(date, everything()) %>% 
+  inner_join(food_area) %>% 
+  filter(area_name == 'U.S. city average') %>%
+  mutate(date = as.Date(as.yearmon(date))) %>% #glimpse() %>% 
+  filter(date>='2000-01-01') %>% 
+  ggplot() +
+  geom_rect(data=recessions.df, aes(xmin=Peak, xmax=Trough, ymin=-Inf, ymax=+Inf), fill='pink', alpha=0.2) +
+  geom_line(aes(date, value, color = area_name), color = 'darkblue') +
+  scale_x_date(date_breaks = '1 year', date_labels = "'%y") +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(title = 'U.S. City Average: Banana Prices per Pound (USD)',
+       x = NULL, y = NULL,
+       caption = 'source: BLS') +
+  theme(legend.position = 'bottom', legend.title = element_blank(),
+        plot.title = element_text(face = 'bold'))
+
+p1  
+
+ggsave(plot = p1, filename = 'bananas_us_national.png', width = 8, height = 4)
+
+
+```
+
+
+```{r}
+
+
+p2 <- 
+food_data %>% 
+  inner_join(food_series_lookup) %>% 
+  inner_join(food_item) %>% 
+  filter(item_code == '711211') %>% 
+  filter(period != 'M13') %>% 
+  mutate(date = paste0(year, stringr::str_replace_all( period, 'M', '-'))) %>% 
+  select(date, everything()) %>% 
+  inner_join(food_area) %>% 
+  mutate(date = as.Date(as.yearmon(date))) %>% #glimpse() %>% 
+  filter(date>='2000-01-01') %>%
+  pivot_wider(id_cols = date, names_from = area_name, values_from = value) %>% 
+  pivot_longer(cols = c(-date, -`U.S. city average`)) %>% 
+  mutate(gap_to_US_avg = value/`U.S. city average`-1) %>% 
+  ggplot() +
+  geom_rect(data=recessions.df, aes(xmin=Peak, xmax=Trough, ymin=-Inf, ymax=+Inf), fill='pink', alpha=0.2) +
+  geom_bar(aes(date, gap_to_US_avg, color = name, fill = name), alpha = 0.4, stat = 'identity') +
+  geom_hline(aes(yintercept = 0), color = 'black') +
+  scale_x_date(date_breaks = '2 year', date_labels = "'%y") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = 'U.S. Regions: Banana Price Percent Difference from U.S. Average (%)',
+       x = NULL, y = NULL,
+       caption = 'source: BLS') +
+  facet_wrap(name~.) +
+  theme(legend.position = 'none',
+        plot.title = element_text(face = 'bold'))
+
+p2
+
+ggsave(plot = p2, filename = 'bananas_us_regional.png', width = 8, height = 4)
+
+```
+
+
+```{r}
+
+
+job_quits <- 'https://download.bls.gov/pub/time.series/jt/jt.data.5.Quits' %>% read_tsv() %>% 
+  inner_join('https://download.bls.gov/pub/time.series/jt/jt.series' %>% read_tsv()) %>% 
+  inner_join('https://download.bls.gov/pub/time.series/jt/jt.state' %>% read_tsv()) #%>%
+  # inner_join('https://download.bls.gov/pub/time.series/jt/jt.industry' %>% read_tsv())
+
+
+p3 <- 
+job_quits %>% 
+  mutate(date = paste0(year, stringr::str_replace_all( period, 'M', '-'))) %>% 
+  select(date, everything()) %>%
+  mutate(date = as.Date(as.yearmon(date))) %>% 
+  filter(ratelevel_code == 'R', display_level == 2) %>% 
+  arrange(series_id, date) %>% 
+  filter(seasonal == 'S') %>% 
+  mutate(rolling12 = rollapplyr(value, FUN = mean, fill = NA, width = 12)) %>% 
+  select(date, state_text, value, rolling12) %>%
+  filter(date==max(date)) %>%
+  arrange(state_text, date) %>% 
+  rename(full = state_text) %>% 
+  inner_join(
+    tibble(
+      full = state.name,
+      state = state.abb
+    )
+  ) %>% #arrange(desc(rolling12))
+  plot_usmap(data = ., values = "rolling12", color = "darkred", labels = T) + 
+  scale_fill_continuous(
+    low = "white", high = "red", name = "Quits Rate (%)", label = scales::comma
+  ) + 
+  theme(legend.position = "right") +
+  labs(title = 'Average Quits Rate by State, Last 12 Months', caption = 'source: BLS, through October 2021') +
+  theme(plot.title = element_text(face = 'bold'),
+        legend.background = element_rect(fill = 'transparent', color = 'transparent'))
+
+p3
+
+ggsave(plot = p3, filename = 'quits_by_state.png', width = 10, height = 5)
+
+
+
+```
+
+
+
+
+```{r}
+
+p4 <- 
+'https://download.bls.gov/pub/time.series/lu/lu.series' %>% 
+  read_tsv() %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.sexs' %>% read_tsv()
+  ) %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.unin' %>% read_tsv()
+  ) %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.tdata' %>% read_tsv()
+  ) %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.pcts' %>% read_tsv()
+  ) %>% inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.orig' %>% read_tsv()
+  ) %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.lfst' %>% read_tsv()
+  ) %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.ages' %>% read_tsv()
+  ) %>% 
+  inner_join(
+        'https://download.bls.gov/pub/time.series/lu/lu.class' %>% read_tsv()
+  ) %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.indy' %>% read_tsv()
+  ) %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.occupation' %>% read_tsv()
+  ) %>% 
+  arrange(series_id) %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.data.0.Current' %>% read_tsv()
+  ) %>% 
+  filter(pcts_text=='Percent of employed within group') %>%  
+  filter(fips_code == '00',
+         ages_text == '16 years and over',
+         orig_text == "All Origins",
+         lfst_text == "Employed",
+         unin_text == "Members of unions",
+         class_text == "Wage and salary workers, excluding incorporated self employed") %>% 
+  filter(occupation_text=='All Occupations', race_code =='00') %>% 
+  mutate(year = as.integer(year),
+         value = as.double(value)) %>% 
+  mutate(sexs_text = ifelse(sexs_text %in% c("Men", "Women"), sexs_text, "Both")) %>% 
+  ggplot() +
+  geom_line(aes(year, value/100, color = sexs_text)) +
+  scale_color_manual(values = c("black", "#764ab0", "#288ba8")) +
+  scale_x_continuous(breaks = seq.int(from = 1995, to = 2021, by = 2)) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = 'U.S.: Union Membership, All Occupations (% of employment)',
+       x = NULL, y = NULL,
+       caption = 'source: BLS') +
+  theme(legend.position = 'bottom',
+        legend.title = element_blank(),
+        plot.title = element_text(face = 'bold'))
+
+p4 
+
+ggsave(plot = p4, filename = 'us_national_union.png', width = 8, height = 4)
+
+
+```
+
+
+
+
+```{r}
+
+
+p5 <-
+'https://download.bls.gov/pub/time.series/lu/lu.series' %>% 
+  read_tsv() %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.sexs' %>% read_tsv()
+  ) %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.unin' %>% read_tsv()
+  ) %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.tdata' %>% read_tsv()
+  ) %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.pcts' %>% read_tsv()
+  ) %>% inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.orig' %>% read_tsv()
+  ) %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.lfst' %>% read_tsv()
+  ) %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.ages' %>% read_tsv()
+  ) %>% 
+  inner_join(
+        'https://download.bls.gov/pub/time.series/lu/lu.class' %>% read_tsv()
+  ) %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.indy' %>% read_tsv()
+  ) %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.occupation' %>% read_tsv()
+  ) %>% 
+  arrange(series_id) %>% 
+  inner_join(
+    'https://download.bls.gov/pub/time.series/lu/lu.data.0.Current' %>% read_tsv()
+  ) %>% 
+  filter(pcts_text=='Percent of employed within group') %>%  
+  filter(fips_code == '00',
+         ages_text == '16 years and over',
+         orig_text == "All Origins",
+         lfst_text == "Employed",
+         unin_text == "Members of unions",
+         class_text == "Wage and salary workers, excluding incorporated self employed") %>% 
+  filter(year == '2021', race_code =='00', !sexs_text %in% c("Men", "Women")) %>% 
+  select(occupation_text, year, value) %>% 
+  mutate(value = as.double(value)) %>% 
+  mutate(all_industries = ifelse(occupation_text == 'All Occupations',  value, NA),
+         all_industries = na.locf(all_industries, na.rm = F)) %>% 
+  filter(occupation_text != 'All Occupations') %>% 
+  mutate(diff = value-all_industries) %>% 
+  arrange(diff) %>% 
+  mutate(occupation_text = stringr::str_replace_all(occupation_text, " occupations", ""), occupation_text = factor(occupation_text, levels = occupation_text)) %>% 
+  ggplot() +
+  geom_bar(aes(occupation_text, diff, fill = diff), color ='black', alpha = 0.9, stat = 'identity') +
+  scale_fill_gradient2(midpoint = 0, low = "gold", high = 'darkblue') +
+  # scale_color_gradient2(midpoint = 0, low = "gold", high = 'darkblue') +
+  geom_hline(aes(yintercept=0),color = 'black') +
+  coord_flip() +
+    labs(title = 'Union Membership by Occupation',
+       subtitle = 'difference vs. to national average',  
+       x = NULL,
+       y = "diff vs. natl avg (percentage points)",
+       caption = 'source: BLS') +
+  theme(legend.position = 'none',
+        legend.title = element_blank(),
+        plot.title = element_text(face = 'bold'))
+
+p5
+
+ggsave(plot = p5, filename = 'us_occupation_union.png', width = 3*2, height = 4*2)
+
+
+```
+
+
+
